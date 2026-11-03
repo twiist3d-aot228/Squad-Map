@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Squad Map</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- ============ ONBOARDING ============ -->
+  <section id="view-onboard" class="view">
+    <div class="onboard-card">
+      <div class="brand"><span class="brand-mark">&#9670;</span> SQUAD&nbsp;MAP</div>
+      <p class="tagline">CHERNARUSPLUS // ONE LIVE SQUAD PICTURE</p>
+
+      <label class="field">YOUR CALLSIGN
+        <input id="ob-name" type="text" maxlength="24" autocomplete="off" placeholder="e.g. TWiiST3D">
+      </label>
+
+      <div class="ob-block">
+        <label class="field">NEW SQUAD NAME
+          <input id="ob-squad-name" type="text" maxlength="32" autocomplete="off" placeholder="e.g. Havoc Platoon">
+        </label>
+        <button id="ob-create" class="btn primary big" type="button">CREATE SQUAD</button>
+      </div>
+
+      <div class="divider"><span>OR JOIN WITH A CODE</span></div>
+
+      <div class="ob-block">
+        <label class="field">INVITE CODE
+          <input id="ob-code" type="text" maxlength="6" autocomplete="off" placeholder="ABCDEF" class="code-input">
+        </label>
+        <button id="ob-join" class="btn big" type="button">JOIN SQUAD</button>
+      </div>
+
+      <p id="ob-error" class="error"></p>
+      <p id="ob-mode-note" class="mode-note"></p>
+    </div>
+  </section>
+
+  <!-- ============ MAIN ============ -->
+  <section id="view-main" class="view hidden">
+    <header id="topbar">
+      <div class="tb-left">
+        <div class="tb-title">SQUAD MAP</div>
+        <div class="tb-sub" id="tb-squad">—</div>
+      </div>
+      <div class="tb-right">
+        <span id="tb-code" class="code-chip" title="Squad invite code">------</span>
+        <button id="tb-status" class="status-btn offline" type="button">OFFLINE</button>
+      </div>
+    </header>
+
+    <main id="tab-pages">
+
+      <div id="page-map" class="page">
+        <div id="map-viewport">
+          <div id="map-world"></div>
+          <div class="map-zoom">
+            <button id="zoom-in" type="button" aria-label="Zoom in">+</button>
+            <button id="zoom-out" type="button" aria-label="Zoom out">&minus;</button>
+            <button id="zoom-fit" type="button" aria-label="Fit map">FIT</button>
+          </div>
+          <div id="place-banner" class="hidden"></div>
+        </div>
+        <div id="map-readout">TAP THE MAP — GRID + NEAREST TOWN</div>
+        <div class="map-actions">
+          <button id="btn-checkin" class="btn primary big" type="button">CHECK IN — I'M HERE</button>
+          <button id="btn-tagmode" class="btn big" type="button">DROP TAG</button>
+        </div>
+      </div>
+
+      <div id="page-feed" class="page hidden">
+        <ul id="feed-list" class="feed-list"></ul>
+      </div>
+
+      <div id="page-board" class="page hidden">
+        <div id="board-tabs" class="subtabs"></div>
+        <ul id="post-list" class="post-list"></ul>
+        <form id="post-form">
+          <input id="post-input" type="text" maxlength="240" autocomplete="off" placeholder="Write to the squad...">
+          <button class="btn primary" type="submit">POST</button>
+        </form>
+      </div>
+
+      <div id="page-squad" class="page hidden">
+        <div class="panel">
+          <h3>SQUAD</h3>
+          <div id="squad-info"></div>
+          <ul id="member-list" class="member-list"></ul>
+        </div>
+        <div class="panel">
+          <h3>SHARED TAGS</h3>
+          <ul id="tag-list" class="tag-list"></ul>
+        </div>
+        <button id="btn-leave" class="btn danger big" type="button">LEAVE SQUAD</button>
+      </div>
+
+    </main>
+
+    <nav id="tabbar">
+      <button data-tab="map" class="active" type="button">MAP</button>
+      <button data-tab="feed" type="button">FEED</button>
+      <button data-tab="board" type="button">BOARD</button>
+      <button data-tab="squad" type="button">SQUAD</button>
+    </nav>
+  </section>
+
+  <!-- ============ BOTTOM SHEET ============ -->
+  <div id="sheet-backdrop" class="hidden">
+    <div id="sheet"></div>
+  </div>
+
+  <script src="firebase-config.js"></script>
+  <script src="data.js"></script>
+  <script src="map.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
