@@ -144,6 +144,14 @@ h3 {
   font-family: var(--condensed); letter-spacing: 26px;
 }
 .pin-layer { position: absolute; inset: 0; }
+.tile-layer { position: absolute; inset: 0; pointer-events: none; }
+.tile-layer img { position: absolute; display: block; pointer-events: none; }
+#map-credit {
+  position: absolute; left: 8px; bottom: 8px; z-index: 4; pointer-events: none;
+  font-family: var(--condensed); font-size: 10px; letter-spacing: 1px;
+  color: rgba(255,255,255,.78); background: rgba(10,12,10,.55);
+  padding: 3px 7px; border-radius: 3px;
+}
 
 .pin {
   position: absolute; transform: translate(-50%, -50%) scale(var(--pin-scale, 1));

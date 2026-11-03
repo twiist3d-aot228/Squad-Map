@@ -8,10 +8,11 @@
  * z grows north, the map is 15360 x 15360.
  *
  * SWAP POINT FOR REAL TILES: everything map-shaped lives in this file.
- * To move to real map tiles later, replace buildSchematicSvg() with a tile
- * layer (e.g. Leaflet CRS.Simple or tiled <img> planes) that honours the
- * same contract — screenToWorld(), worldToScreen(), focus(), render() —
- * and the rest of the app never notices.
+ * The tile layer LANDED Nov 3, 2026: iZurvive satellite tiles stream into
+ * a .tile-layer div between the schematic and the pins, honouring the same
+ * contract — screenToWorld(), worldToScreen(), focus(), render() — and the
+ * schematic stays underneath as the offline fallback. The rest of the app
+ * never noticed.
  */
 
 const SquadMapGeo = (() => {
@@ -89,6 +90,13 @@ const SquadMapGeo = (() => {
 
 /* ---------------------------------------------------------------------- */
 
+/* iZurvive satellite tiles: 256px webp, slippy scheme, y=0 at the NORTH
+   edge (verified against live tiles Nov 3, 2026 — NW tile is inland, SE
+   tile is open sea). "1.26.0" is iZurvive's tile-set version segment: if
+   a DayZ update ever moves it and tiles 404, the schematic underneath
+   keeps the app usable and bumping this one string is the whole fix. */
+const IZ_TILE_BASE = "https://maps.izurvive.com/maps/ChernarusPlus-Sat/1.26.0/tiles/";
+
 class SquadMapView {
   constructor(viewportEl, worldEl, opts) {
     this.viewport = viewportEl;
@@ -107,6 +115,11 @@ class SquadMapView {
     this.world.style.width = this.WORLD_PX + "px";
     this.world.style.height = this.WORLD_PX + "px";
     this.world.insertAdjacentHTML("afterbegin", this._buildSchematicSvg());
+    this.tileLayer = document.createElement("div");
+    this.tileLayer.className = "tile-layer";
+    this.world.appendChild(this.tileLayer);
+    this.tileKey = "";
+    this.tileTimer = 0;
     this.pinLayer = document.createElement("div");
     this.pinLayer.className = "pin-layer";
     this.world.appendChild(this.pinLayer);
@@ -193,6 +206,51 @@ class SquadMapView {
     this.pinLayer.querySelectorAll(".pin").forEach((pin) => {
       pin.style.setProperty("--pin-scale", String(inv));
     });
+    this._queueTiles();
+  }
+
+  /* --- satellite tile layer ---------------------------------------------- */
+
+  _tileZoomForScale() {
+    // Pick the tile zoom whose native resolution is closest to what the
+    // screen is showing: tile zoom z renders the world at 256 * 2^z px.
+    const z = Math.round(Math.log2((this.WORLD_PX * this.scale) / 256));
+    return Math.max(2, Math.min(8, z));
+  }
+
+  _queueTiles() {
+    if (this.tileTimer) return;
+    this.tileTimer = setTimeout(() => { this.tileTimer = 0; this._syncTiles(); }, 120);
+  }
+
+  _syncTiles() {
+    const rect = this.viewport.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const z = this._tileZoomForScale();
+    const n = Math.pow(2, z);
+    const worldPx = this.WORLD_PX * this.scale;
+    const fx0 = Math.max(0, -this.tx / worldPx), fx1 = Math.min(1, (rect.width - this.tx) / worldPx);
+    const fy0 = Math.max(0, -this.ty / worldPx), fy1 = Math.min(1, (rect.height - this.ty) / worldPx);
+    if (fx1 <= fx0 || fy1 <= fy0) return;
+    const x0 = Math.max(0, Math.floor(fx0 * n) - 1), x1 = Math.min(n - 1, Math.floor(fx1 * n) + 1);
+    const y0 = Math.max(0, Math.floor(fy0 * n) - 1), y1 = Math.min(n - 1, Math.floor(fy1 * n) + 1);
+    const key = [z, x0, x1, y0, y1].join("/");
+    if (key === this.tileKey) return;
+    this.tileKey = key;
+    const sizePct = 100 / n;
+    let html = "";
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        html += `<img alt="" draggable="false" src="${IZ_TILE_BASE}${z}/${x}/${y}.webp" ` +
+          `style="left:${x * sizePct}%;top:${y * sizePct}%;width:${sizePct}%;height:${sizePct}%">`;
+      }
+    }
+    this.tileLayer.innerHTML = html;
+    // A tile that fails (offline, moved version) hides itself; the
+    // schematic underneath shows through and the map stays usable.
+    this.tileLayer.querySelectorAll("img").forEach((img) => {
+      img.addEventListener("error", () => { img.style.display = "none"; });
+    });
   }
 
   fit() {
@@ -202,7 +260,7 @@ class SquadMapView {
     this.tx = (rect.width - this.WORLD_PX * this.scale) / 2;
     this.ty = (rect.height - this.WORLD_PX * this.scale) / 2;
     this.minScale = this.scale * 0.85;
-    this.maxScale = this.scale * 16;
+    this.maxScale = this.scale * 48; // deep enough for native-res z6 tiles
     this._apply();
   }
 
