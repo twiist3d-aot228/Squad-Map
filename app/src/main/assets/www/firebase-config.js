@@ -19,10 +19,10 @@
  * no UI code changes needed.
  */
 window.SQUADMAP_FIREBASE_CONFIG = {
-  apiKey: "",
-  authDomain: "",
-  projectId: "",
-  storageBucket: "",
-  messagingSenderId: "",
-  appId: ""
+  apiKey: "AIzaSyACAQO97XmPCJJ4QjVdB22TeLtXtgLXMrY",
+  authDomain: "squad-map-f097c.firebaseapp.com",
+  projectId: "squad-map-f097c",
+  storageBucket: "squad-map-f097c.firebasestorage.app",
+  messagingSenderId: "685643817207",
+  appId: "1:685643817207:web:d632d7103fc615532cb3f2"
 };

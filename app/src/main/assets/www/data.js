@@ -33,6 +33,7 @@
 
 const SquadData = (() => {
   const STORE_KEY = "squadmap.demo-store.v1";
+  const LIVE_CACHE_KEY = "squadmap.live-cache.v1";
   const SESSION_KEY = "squadmap.session.v1";
   const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ"; // no I / O — codes get read aloud under fire
 
@@ -291,23 +292,287 @@ const SquadData = (() => {
   class FirestoreAdapter {
     constructor(fallback) {
       this.fallback = fallback;
-      this.mode = () => "live";
-      if (typeof window.firebase === "undefined" && typeof window.__squadmapFirestoreReady !== "function") {
-        console.warn("[SquadMap] Firebase config present but SDK not loaded — running demo data until the SDK ships in index.html.");
-        this.mode = () => "demo";
+      this.listeners = new Set();
+      this.parts = {};          // code -> { base, members, tags, posts, feed }
+      this.unsubs = {};         // code -> [unsubscribe, ...]
+      this.pending = {};        // code -> member awaiting squad-doc confirmation
+      this.memberWritten = {};  // "code/memberId" -> true
+      this.db = null;
+      this._live = false;
+      try {
+        if (typeof window.firebase !== "undefined" && typeof window.firebase.firestore === "function") {
+          if (!window.firebase.apps.length) window.firebase.initializeApp(window.SQUADMAP_FIREBASE_CONFIG);
+          this.db = window.firebase.firestore();
+          this._live = true;
+          this._loadCache();
+        }
+      } catch (err) {
+        console.warn("[SquadMap] Firebase init failed - demo mode.", err);
+        this._live = false;
+      }
+      if (!this._live) console.warn("[SquadMap] Firebase SDK not loaded - running demo data.");
+    }
+
+    mode() { return this._live ? "live" : "demo"; }
+
+    /* ---- local mirror cache (cold-start restore + offline reads) ---- */
+
+    _loadCache() {
+      try {
+        const raw = localStorage.getItem(LIVE_CACHE_KEY);
+        if (!raw) return;
+        const cache = JSON.parse(raw);
+        Object.keys(cache).forEach((code) => {
+          const s = cache[code];
+          this.parts[code] = {
+            base: { name: s.name, createdAt: s.createdAt },
+            members: s.members || {}, tags: s.tags || {},
+            posts: s.posts || {}, feed: s.feed || {}
+          };
+        });
+      } catch (err) { /* the cache is a convenience; a bad one is ignored */ }
+    }
+
+    _saveCache() {
+      try {
+        const cache = {};
+        Object.keys(this.parts).forEach((code) => { cache[code] = this._assemble(code); });
+        localStorage.setItem(LIVE_CACHE_KEY, JSON.stringify(cache));
+      } catch (err) { /* storage blocked - live sync still works */ }
+    }
+
+    _assemble(code) {
+      const p = this.parts[code];
+      if (!p) return null;
+      return {
+        name: p.base.name || "", createdAt: p.base.createdAt || 0,
+        members: p.members, tags: p.tags, posts: p.posts, feed: p.feed
+      };
+    }
+
+    _emit() {
+      this._saveCache();
+      this.listeners.forEach((cb) => { try { cb(); } catch (err) { /* listener errors stay local */ } });
+    }
+
+    subscribe(cb) {
+      if (!this._live) return this.fallback.subscribe(cb);
+      this.listeners.add(cb);
+      return () => this.listeners.delete(cb);
+    }
+
+    /* ---- Firestore wiring: squads/{code} + members/tags/posts/feed ---- */
+
+    _doc(code) { return this.db.collection("squads").doc(code); }
+
+    _ensureWatch(code) {
+      if (!this._live || this.unsubs[code]) return;
+      this.unsubs[code] = [];
+      if (!this.parts[code]) {
+        this.parts[code] = { base: {}, members: {}, tags: {}, posts: {}, feed: {} };
+      }
+      const ref = this._doc(code);
+      const onErr = (err) => console.warn("[SquadMap] Firestore listener error:", err);
+      this.unsubs[code].push(ref.onSnapshot((snap) => {
+        if (snap.exists) {
+          const d = snap.data();
+          this.parts[code].base = { name: d.name, createdAt: d.createdAt };
+          this._flushPending(code);
+        }
+        this._emit();
+      }, onErr));
+      ["members", "tags", "posts", "feed"].forEach((col) => {
+        this.unsubs[code].push(ref.collection(col).onSnapshot((qs) => {
+          const map = {};
+          qs.forEach((docSnap) => { map[docSnap.id] = docSnap.data(); });
+          this.parts[code][col] = map;
+          this._emit();
+        }, onErr));
+      });
+    }
+
+    _flushPending(code) {
+      const member = this.pending[code];
+      if (!member) return;
+      const key = code + "/" + member.id;
+      if (this.memberWritten[key]) { delete this.pending[code]; return; }
+      this.memberWritten[key] = true;
+      delete this.pending[code];
+      const entry = this._feedEntry({ kind: "join", memberName: member.name, text: member.name + " joined the squad", x: null, z: null });
+      const ref = this._doc(code);
+      ref.collection("members").doc(member.id).set(member).catch((e) => console.warn("[SquadMap] member write failed", e));
+      ref.collection("feed").doc(entry.id).set(entry).catch((e) => console.warn("[SquadMap] feed write failed", e));
+      if (!this.parts[code].feed[entry.id]) this.parts[code].feed[entry.id] = entry;
+    }
+
+    _feedEntry(entry) {
+      const now = Date.now();
+      return Object.assign({ id: uid("ev_"), createdAt: now, seq: now }, entry);
+    }
+
+    _writeFeed(code, entry) {
+      if (!this.parts[code].feed[entry.id]) this.parts[code].feed[entry.id] = entry;
+      this._doc(code).collection("feed").doc(entry.id).set(entry)
+        .catch((e) => console.warn("[SquadMap] feed write failed", e));
+    }
+
+    _writeMember(code, member) {
+      this.parts[code].members[member.id] = member;
+      this.memberWritten[code + "/" + member.id] = true;
+      this._doc(code).collection("members").doc(member.id).set(member)
+        .catch((e) => console.warn("[SquadMap] member write failed", e));
+    }
+
+    _squadParts(code) {
+      this._ensureWatch(code);
+      return this.parts[code];
+    }
+
+    /* ---- adapter API (mirrors DemoAdapter semantics one-for-one) ---- */
+
+    createSquad(squadName, memberName) {
+      if (!this._live) return this.fallback.createSquad(squadName, memberName);
+      let code = "";
+      do {
+        code = "";
+        for (let i = 0; i < 6; i++) code += CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)];
+      } while (this.parts[code] && this.parts[code].base && this.parts[code].base.createdAt);
+      const now = Date.now();
+      const member = { id: uid("m_"), name: memberName, online: false, x: null, z: null, place: null, lastSeenAt: null, joinedAt: now };
+      this.parts[code] = { base: { name: squadName, createdAt: now }, members: { [member.id]: member }, tags: {}, posts: {}, feed: {} };
+      const entry = this._feedEntry({ kind: "join", memberName, text: memberName + " created the squad", x: null, z: null });
+      this.parts[code].feed[entry.id] = entry;
+      this._ensureWatch(code);
+      const ref = this._doc(code);
+      ref.set({ name: squadName, createdAt: now }).catch((e) => console.warn("[SquadMap] squad write failed", e));
+      this.memberWritten[code + "/" + member.id] = true;
+      ref.collection("members").doc(member.id).set(member).catch((e) => console.warn("[SquadMap] member write failed", e));
+      ref.collection("feed").doc(entry.id).set(entry).catch((e) => console.warn("[SquadMap] feed write failed", e));
+      this._emit();
+      return { code, squad: this._assemble(code), member };
+    }
+
+    joinSquad(code, memberName) {
+      if (!this._live) return this.fallback.joinSquad(code, memberName);
+      const up = code.toUpperCase();
+      const member = { id: uid("m_"), name: memberName, online: false, x: null, z: null, place: null, lastSeenAt: null, joinedAt: Date.now() };
+      const p = this._squadParts(up);
+      p.members[member.id] = member;
+      this.pending[up] = member;
+      // If the squad doc is already mirrored, the join writes immediately;
+      // otherwise _flushPending fires when the doc snapshot lands. A code
+      // whose doc never appears stays a local phantom - the host reads the
+      // real code aloud, so a wrong code is obvious and self-corrects.
+      if (p.base && p.base.createdAt) this._flushPending(up);
+      this._emit();
+      return { code: up, squad: this._assemble(up), member };
+    }
+
+    leaveSquad(code, memberId) {
+      if (!this._live) return this.fallback.leaveSquad(code, memberId);
+      const p = this.parts[code];
+      if (p && p.members[memberId]) {
+        const name = p.members[memberId].name;
+        delete p.members[memberId];
+        const entry = this._feedEntry({ kind: "leave", memberName: name, text: name + " left the squad", x: null, z: null });
+        this._writeFeed(code, entry);
+        this._doc(code).collection("members").doc(memberId).delete().catch((e) => console.warn("[SquadMap] member delete failed", e));
+        this._emit();
       }
     }
-    subscribe(cb) { return this.fallback.subscribe(cb); }
-    createSquad(a, b) { return this.fallback.createSquad(a, b); }
-    joinSquad(a, b) { return this.fallback.joinSquad(a, b); }
-    leaveSquad(a, b) { return this.fallback.leaveSquad(a, b); }
-    getSquad(a) { return this.fallback.getSquad(a); }
-    checkIn(a, b, c) { return this.fallback.checkIn(a, b, c); }
-    goOffline(a, b) { return this.fallback.goOffline(a, b); }
-    goOnline(a, b) { return this.fallback.goOnline(a, b); }
-    addTag(a, b, c) { return this.fallback.addTag(a, b, c); }
-    removeTag(a, b, c) { return this.fallback.removeTag(a, b, c); }
-    addPost(a, b, c, d) { return this.fallback.addPost(a, b, c, d); }
+
+    getSquad(code) {
+      if (!this._live) return this.fallback.getSquad(code);
+      this._ensureWatch(code);
+      const p = this.parts[code];
+      if (!p) return null;
+      const known = p.base.createdAt || Object.keys(p.members).length || this.pending[code];
+      if (!known) return null; // listener still loading, or no such squad
+      return this._assemble(code);
+    }
+
+    checkIn(code, memberId, pos) {
+      if (!this._live) return this.fallback.checkIn(code, memberId, pos);
+      const p = this._squadParts(code);
+      const m = p.members[memberId];
+      if (!m) return null;
+      m.online = true;
+      m.x = pos.x; m.z = pos.z; m.place = pos.place;
+      m.lastSeenAt = Date.now();
+      const entry = this._feedEntry({ kind: "checkin", memberName: m.name, text: m.name + " checked in — " + pos.place, x: pos.x, z: pos.z });
+      this._writeMember(code, m);
+      this._writeFeed(code, entry);
+      this._emit();
+      return m;
+    }
+
+    goOffline(code, memberId) {
+      if (!this._live) return this.fallback.goOffline(code, memberId);
+      const p = this._squadParts(code);
+      const m = p.members[memberId];
+      if (!m) return null;
+      m.online = false;
+      m.lastSeenAt = Date.now();
+      const entry = this._feedEntry({ kind: "offline", memberName: m.name, text: m.name + " went offline — last seen " + (m.place || "unknown"), x: m.x, z: m.z });
+      this._writeMember(code, m);
+      this._writeFeed(code, entry);
+      this._emit();
+      return m;
+    }
+
+    goOnline(code, memberId) {
+      if (!this._live) return this.fallback.goOnline(code, memberId);
+      const p = this._squadParts(code);
+      const m = p.members[memberId];
+      if (!m) return null;
+      m.online = true;
+      m.lastSeenAt = Date.now();
+      const entry = this._feedEntry({ kind: "online", memberName: m.name, text: m.name + " is back online", x: m.x, z: m.z });
+      this._writeMember(code, m);
+      this._writeFeed(code, entry);
+      this._emit();
+      return m;
+    }
+
+    addTag(code, memberId, tag) {
+      if (!this._live) return this.fallback.addTag(code, memberId, tag);
+      const p = this._squadParts(code);
+      const m = p.members[memberId];
+      if (!m) return null;
+      const id = uid("t_");
+      const full = Object.assign({ id, memberId, memberName: m.name, createdAt: Date.now() }, tag);
+      p.tags[id] = full;
+      this._doc(code).collection("tags").doc(id).set(full).catch((e) => console.warn("[SquadMap] tag write failed", e));
+      const entry = this._feedEntry({ kind: "tag", memberName: m.name, text: m.name + " marked a " + tag.category + ": " + tag.title, x: tag.x, z: tag.z });
+      this._writeFeed(code, entry);
+      this._emit();
+      return full;
+    }
+
+    removeTag(code, memberId, tagId) {
+      if (!this._live) return this.fallback.removeTag(code, memberId, tagId);
+      const p = this.parts[code];
+      if (!p) return;
+      const tag = p.tags[tagId];
+      if (tag && tag.memberId === memberId) {
+        delete p.tags[tagId];
+        this._doc(code).collection("tags").doc(tagId).delete().catch((e) => console.warn("[SquadMap] tag delete failed", e));
+        this._emit();
+      }
+    }
+
+    addPost(code, memberId, tab, text) {
+      if (!this._live) return this.fallback.addPost(code, memberId, tab, text);
+      const p = this._squadParts(code);
+      const m = p.members[memberId];
+      if (!m) return null;
+      const now = Date.now();
+      const post = { id: uid("p_"), memberId, memberName: m.name, tab, text, createdAt: now, seq: now };
+      p.posts[post.id] = post;
+      this._doc(code).collection("posts").doc(post.id).set(post).catch((e) => console.warn("[SquadMap] post write failed", e));
+      this._emit();
+      return post;
+    }
   }
 
   /* ------------------------------------------------------------------ */
