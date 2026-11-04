@@ -440,7 +440,6 @@
   $("zoom-out").addEventListener("click", () => mapView && mapView.zoomStep(0.77));
   $("zoom-fit").addEventListener("click", () => mapView && mapView.fit());
   $("toggle-tiers").addEventListener("click", (e) => { if (mapView) e.currentTarget.classList.toggle("on", mapView.toggleTiers()); });
-  $("toggle-loot").addEventListener("click", (e) => { if (mapView) e.currentTarget.classList.toggle("on", mapView.toggleLoot()); });
 
   /* ---------------- board ---------------- */
 

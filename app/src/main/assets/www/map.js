@@ -65,6 +65,10 @@ const SquadMapGeo = (() => {
     { name: "Orlovets", x: 8519, z: 5347 },
     { name: "NW Airfield", x: 4539, z: 10127, airfield: true },
     { name: "NE Airfield", x: 11942, z: 12573, airfield: true },
+    { name: "Tisy Military Base", x: 1674, z: 13947, poi: true },
+    { name: "Kamensk Military Base", x: 780, z: 12120, poi: true },
+    { name: "Pavlovo Military Base", x: 2073, z: 3403, poi: true },
+    { name: "Myshkino Tents", x: 1400, z: 5950, poi: true },
     { name: "Balota Airstrip", x: 4930, z: 2450, airfield: true }
   ];
 
@@ -97,17 +101,6 @@ const SquadMapGeo = (() => {
    keeps the app usable and bumping this one string is the whole fix. */
 const IZ_TILE_BASE = "https://maps.izurvive.com/maps/ChernarusPlus-Sat/1.26.0/tiles/";
 
-/* Loot drop categories (loot-data.js codes) in iZurvive's spirit: a
-   coloured disc per building usage, letter/star glyph at deep zoom. */
-const LOOT_STYLE = {
-  M: { color: "#7a9a4d", glyph: "★" }, P: { color: "#4a7dc9", glyph: "P" },
-  D: { color: "#d94f4f", glyph: "+" }, F: { color: "#ef8f3c", glyph: "F" },
-  X: { color: "#9a6bc9", glyph: "▦" }, H: { color: "#a3804f", glyph: "H" },
-  I: { color: "#9aa3ab", glyph: "I" }, A: { color: "#86a860", glyph: "A" },
-  O: { color: "#7f9bb3", glyph: "O" }, S: { color: "#b48ec9", glyph: "S" },
-  R: { color: "#d6c07a", glyph: "⌂" }
-};
-
 class SquadMapView {
   constructor(viewportEl, worldEl, opts) {
     this.viewport = viewportEl;
@@ -136,18 +129,11 @@ class SquadMapView {
     this.failedTiles = new Set();
     this.tierSvg = this._buildTierSvg();
     if (this.tierSvg) this.world.appendChild(this.tierSvg);
-    this.lootCanvas = document.createElement("canvas");
-    this.lootCanvas.className = "loot-canvas";
-    this.lootCanvas.width = this.WORLD_PX;
-    this.lootCanvas.height = this.WORLD_PX;
-    this.world.appendChild(this.lootCanvas);
     this.labelLayer = document.createElement("div");
     this.labelLayer.className = "label-layer";
     this.world.appendChild(this.labelLayer);
     this._buildLabels();
     this.showTiers = true;
-    this.showLoot = true;
-    this.lootPts = null;
     this.pinLayer = document.createElement("div");
     this.pinLayer.className = "pin-layer";
     this.world.appendChild(this.pinLayer);
@@ -274,7 +260,7 @@ class SquadMapView {
     const x0 = Math.max(0, Math.floor(v.fx0 * n) - 1), x1 = Math.min(n - 1, Math.floor(v.fx1 * n) + 1);
     const y0 = Math.max(0, Math.floor(v.fy0 * n) - 1), y1 = Math.min(n - 1, Math.floor(v.fy1 * n) + 1);
     const key = [z, x0, x1, y0, y1].join("/");
-    if (key === this.tileKey) { this._drawLoot(z, v); return; }
+    if (key === this.tileKey) return;
     this.tileKey = key;
     const sizePct = 100 / n;
     const desired = new Set();
@@ -299,7 +285,6 @@ class SquadMapView {
       }
     }
     this._pruneTiles(desired);
-    this._drawLoot(z, v);
   }
 
   _pruneTiles(desired) {
@@ -356,79 +341,10 @@ class SquadMapView {
     const W = SquadMapGeo.WORLD;
     let html = "";
     for (const t of SquadMapGeo.TOWNS) {
-      const cls = "map-label" + (t.major ? " major" : "") + (t.airfield ? " airfield minor" : " minor");
+      const cls = "map-label" + (t.major ? " major" : "") + (t.airfield ? " airfield minor" : (t.poi ? " poi minor" : " minor"));
       html += `<span class="${cls}" style="left:${t.x / W * 100}%;top:${(1 - t.z / W) * 100}%">${t.name.toUpperCase()}</span>`;
     }
     this.labelLayer.innerHTML = html;
-  }
-
-  /* --- loot drop points ------------------------------------------------------- */
-
-  _lootPoints() {
-    if (this.lootPts) return this.lootPts;
-    const raw = window.SQUADMAP_LOOT || {};
-    const pts = [];
-    for (const code of Object.keys(raw)) {
-      for (const pair of raw[code].split(";")) {
-        const [x, z] = pair.split(",");
-        pts.push([+x, +z, code]);
-      }
-    }
-    this.lootPts = pts;
-    return pts;
-  }
-
-  _drawLoot(z, v) {
-    const ctx = this.lootCanvas.getContext("2d");
-    const S = this.WORLD_PX;
-    ctx.clearRect(0, 0, S, S);
-    if (!this.showLoot) return;
-    const pts = this._lootPoints();
-    if (!pts.length) return;
-    const W = SquadMapGeo.WORLD;
-    const wx0 = v.fx0 * W - 300, wx1 = v.fx1 * W + 300;
-    const wz0 = (1 - v.fy1) * W - 300, wz1 = (1 - v.fy0) * W + 300;
-    const discs = z >= 6;
-    const targetPx = discs ? 13 : (z <= 3 ? 3 : (z === 4 ? 4 : 5.5));
-    const r = targetPx / this.scale;
-    const byCat = {};
-    for (const [x, z2, code] of pts) {
-      if (x < wx0 || x > wx1 || z2 < wz0 || z2 > wz1) continue;
-      (byCat[code] = byCat[code] || []).push([x / W * S, (1 - z2 / W) * S]);
-    }
-    for (const code of Object.keys(byCat)) {
-      const st = LOOT_STYLE[code];
-      if (!st) continue;
-      ctx.beginPath();
-      for (const [cx, cy] of byCat[code]) { ctx.moveTo(cx + r, cy); ctx.arc(cx, cy, r, 0, 6.2832); }
-      ctx.fillStyle = st.color;
-      ctx.globalAlpha = 0.9;
-      ctx.fill();
-      if (discs) {
-        ctx.globalAlpha = 1;
-        ctx.lineWidth = r * 0.22;
-        ctx.strokeStyle = "rgba(10,10,10,0.55)";
-        ctx.stroke();
-      }
-    }
-    if (discs) {
-      ctx.fillStyle = "#fff";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.font = "700 " + (r * 1.15) + "px sans-serif";
-      for (const code of Object.keys(byCat)) {
-        const st = LOOT_STYLE[code];
-        if (!st || !st.glyph) continue;
-        for (const [cx, cy] of byCat[code]) ctx.fillText(st.glyph, cx, cy + r * 0.06);
-      }
-    }
-    ctx.globalAlpha = 1;
-  }
-
-  toggleLoot() {
-    this.showLoot = !this.showLoot;
-    this._drawLoot(this._tileZoomForScale(), this._visibleFrac());
-    return this.showLoot;
   }
 
   fit() {
