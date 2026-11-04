@@ -97,6 +97,17 @@ const SquadMapGeo = (() => {
    keeps the app usable and bumping this one string is the whole fix. */
 const IZ_TILE_BASE = "https://maps.izurvive.com/maps/ChernarusPlus-Sat/1.26.0/tiles/";
 
+/* Loot drop categories (loot-data.js codes) in iZurvive's spirit: a
+   coloured disc per building usage, letter/star glyph at deep zoom. */
+const LOOT_STYLE = {
+  M: { color: "#7a9a4d", glyph: "★" }, P: { color: "#4a7dc9", glyph: "P" },
+  D: { color: "#d94f4f", glyph: "+" }, F: { color: "#ef8f3c", glyph: "F" },
+  X: { color: "#9a6bc9", glyph: "▦" }, H: { color: "#a3804f", glyph: "H" },
+  I: { color: "#9aa3ab", glyph: "I" }, A: { color: "#86a860", glyph: "A" },
+  O: { color: "#7f9bb3", glyph: "O" }, S: { color: "#b48ec9", glyph: "S" },
+  R: { color: "#d6c07a", glyph: "⌂" }
+};
+
 class SquadMapView {
   constructor(viewportEl, worldEl, opts) {
     this.viewport = viewportEl;
@@ -120,6 +131,23 @@ class SquadMapView {
     this.world.appendChild(this.tileLayer);
     this.tileKey = "";
     this.tileTimer = 0;
+    this.tileZ = -1;
+    this.tileEls = new Map();
+    this.failedTiles = new Set();
+    this.tierSvg = this._buildTierSvg();
+    if (this.tierSvg) this.world.appendChild(this.tierSvg);
+    this.lootCanvas = document.createElement("canvas");
+    this.lootCanvas.className = "loot-canvas";
+    this.lootCanvas.width = this.WORLD_PX;
+    this.lootCanvas.height = this.WORLD_PX;
+    this.world.appendChild(this.lootCanvas);
+    this.labelLayer = document.createElement("div");
+    this.labelLayer.className = "label-layer";
+    this.world.appendChild(this.labelLayer);
+    this._buildLabels();
+    this.showTiers = true;
+    this.showLoot = true;
+    this.lootPts = null;
     this.pinLayer = document.createElement("div");
     this.pinLayer.className = "pin-layer";
     this.world.appendChild(this.pinLayer);
@@ -206,6 +234,10 @@ class SquadMapView {
     this.pinLayer.querySelectorAll(".pin").forEach((pin) => {
       pin.style.setProperty("--pin-scale", String(inv));
     });
+    // Place labels counter-scale off the same factor, and minor-town
+    // labels fade in once the view is past ~2x fit zoom (iZurvive-style).
+    this.world.style.setProperty("--inv-scale", String(inv));
+    this.labelLayer.classList.toggle("minors", this.scale > (this.minScale || 0.2) * 2.4);
     this._queueTiles();
   }
 
@@ -223,34 +255,180 @@ class SquadMapView {
     this.tileTimer = setTimeout(() => { this.tileTimer = 0; this._syncTiles(); }, 120);
   }
 
-  _syncTiles() {
+  _visibleFrac() {
     const rect = this.viewport.getBoundingClientRect();
-    if (!rect.width || !rect.height) return;
-    const z = this._tileZoomForScale();
-    const n = Math.pow(2, z);
     const worldPx = this.WORLD_PX * this.scale;
-    const fx0 = Math.max(0, -this.tx / worldPx), fx1 = Math.min(1, (rect.width - this.tx) / worldPx);
-    const fy0 = Math.max(0, -this.ty / worldPx), fy1 = Math.min(1, (rect.height - this.ty) / worldPx);
-    if (fx1 <= fx0 || fy1 <= fy0) return;
-    const x0 = Math.max(0, Math.floor(fx0 * n) - 1), x1 = Math.min(n - 1, Math.floor(fx1 * n) + 1);
-    const y0 = Math.max(0, Math.floor(fy0 * n) - 1), y1 = Math.min(n - 1, Math.floor(fy1 * n) + 1);
+    return {
+      rect,
+      fx0: Math.max(0, -this.tx / worldPx), fx1: Math.min(1, (rect.width - this.tx) / worldPx),
+      fy0: Math.max(0, -this.ty / worldPx), fy1: Math.min(1, (rect.height - this.ty) / worldPx)
+    };
+  }
+
+  _syncTiles() {
+    const v = this._visibleFrac();
+    if (!v.rect.width || v.fx1 <= v.fx0 || v.fy1 <= v.fy0) return;
+    const z = this._tileZoomForScale();
+    if (z !== this.tileZ) { this.failedTiles.clear(); this.tileZ = z; }
+    const n = Math.pow(2, z);
+    const x0 = Math.max(0, Math.floor(v.fx0 * n) - 1), x1 = Math.min(n - 1, Math.floor(v.fx1 * n) + 1);
+    const y0 = Math.max(0, Math.floor(v.fy0 * n) - 1), y1 = Math.min(n - 1, Math.floor(v.fy1 * n) + 1);
     const key = [z, x0, x1, y0, y1].join("/");
-    if (key === this.tileKey) return;
+    if (key === this.tileKey) { this._drawLoot(z, v); return; }
     this.tileKey = key;
     const sizePct = 100 / n;
-    let html = "";
+    const desired = new Set();
     for (let y = y0; y <= y1; y++) {
       for (let x = x0; x <= x1; x++) {
-        html += `<img alt="" draggable="false" src="${IZ_TILE_BASE}${z}/${x}/${y}.webp" ` +
-          `style="left:${x * sizePct}%;top:${y * sizePct}%;width:${sizePct}%;height:${sizePct}%">`;
+        const k = z + "/" + x + "/" + y;
+        desired.add(k);
+        if (this.tileEls.has(k) || this.failedTiles.has(k)) continue;
+        const img = document.createElement("img");
+        img.alt = "";
+        img.draggable = false;
+        img.style.left = (x * sizePct) + "%";
+        img.style.top = (y * sizePct) + "%";
+        img.style.width = sizePct + "%";
+        img.style.height = sizePct + "%";
+        img.style.opacity = "0";
+        img.addEventListener("load", () => { img.style.opacity = "1"; this._pruneTiles(desired); });
+        img.addEventListener("error", () => { this.failedTiles.add(k); img.remove(); this.tileEls.delete(k); });
+        img.src = IZ_TILE_BASE + z + "/" + x + "/" + y + ".webp";
+        this.tileEls.set(k, img);
+        this.tileLayer.appendChild(img);
       }
     }
-    this.tileLayer.innerHTML = html;
-    // A tile that fails (offline, moved version) hides itself; the
-    // schematic underneath shows through and the map stays usable.
-    this.tileLayer.querySelectorAll("img").forEach((img) => {
-      img.addEventListener("error", () => { img.style.display = "none"; });
-    });
+    this._pruneTiles(desired);
+    this._drawLoot(z, v);
+  }
+
+  _pruneTiles(desired) {
+    // Old tiles stay on screen until their replacements have loaded —
+    // swapping the whole layer at once is what made the map (and the old
+    // schematic labels under it) flash during pans and zooms.
+    let loaded = 0;
+    for (const k of desired) {
+      const el = this.tileEls.get(k);
+      if (el && el.style.opacity === "1") loaded++;
+    }
+    const allIn = loaded >= desired.size;
+    if (!allIn && this.tileEls.size <= 170) return;
+    for (const [k, el] of this.tileEls) {
+      if (!desired.has(k)) { el.remove(); this.tileEls.delete(k); }
+    }
+  }
+
+  /* --- tier zones ---------------------------------------------------------- */
+
+  _buildTierSvg() {
+    const tiers = window.SQUADMAP_TIERS;
+    if (!tiers) return null;
+    const W = SquadMapGeo.WORLD;
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", `0 0 ${W} ${W}`);
+    svg.setAttribute("preserveAspectRatio", "none");
+    svg.setAttribute("class", "tier-svg");
+    svg.setAttribute("aria-hidden", "true");
+    const fills = { "1": "rgba(120,200,90,0.13)", "2": "rgba(240,200,60,0.15)", "3": "rgba(240,140,40,0.15)", "4": "rgba(230,60,50,0.19)" };
+    const strokes = { "1": "rgba(120,200,90,0.45)", "2": "rgba(240,200,60,0.5)", "3": "rgba(240,140,40,0.55)", "4": "rgba(230,60,50,0.6)" };
+    let html = "";
+    for (const t of ["1", "2", "3", "4"]) {
+      for (const ring of tiers[t] || []) {
+        html += `<polygon points="${ring}" fill="${fills[t]}" stroke="${strokes[t]}" stroke-width="26" stroke-linejoin="round"/>`;
+      }
+    }
+    const label = (x, z, text) => `<text class="tier-text" x="${x}" y="${W - z}">${text}</text>`;
+    html += label(7200, 2400, "TIER 1") + label(9900, 5900, "TIER 2") +
+            label(5000, 9300, "TIER 3") + label(1750, 13900, "TIER 4");
+    svg.innerHTML = html;
+    return svg;
+  }
+
+  toggleTiers() {
+    this.showTiers = !this.showTiers;
+    if (this.tierSvg) this.tierSvg.style.display = this.showTiers ? "" : "none";
+    return this.showTiers;
+  }
+
+  /* --- place labels ---------------------------------------------------------- */
+
+  _buildLabels() {
+    const W = SquadMapGeo.WORLD;
+    let html = "";
+    for (const t of SquadMapGeo.TOWNS) {
+      const cls = "map-label" + (t.major ? " major" : "") + (t.airfield ? " airfield minor" : " minor");
+      html += `<span class="${cls}" style="left:${t.x / W * 100}%;top:${(1 - t.z / W) * 100}%">${t.name.toUpperCase()}</span>`;
+    }
+    this.labelLayer.innerHTML = html;
+  }
+
+  /* --- loot drop points ------------------------------------------------------- */
+
+  _lootPoints() {
+    if (this.lootPts) return this.lootPts;
+    const raw = window.SQUADMAP_LOOT || {};
+    const pts = [];
+    for (const code of Object.keys(raw)) {
+      for (const pair of raw[code].split(";")) {
+        const [x, z] = pair.split(",");
+        pts.push([+x, +z, code]);
+      }
+    }
+    this.lootPts = pts;
+    return pts;
+  }
+
+  _drawLoot(z, v) {
+    const ctx = this.lootCanvas.getContext("2d");
+    const S = this.WORLD_PX;
+    ctx.clearRect(0, 0, S, S);
+    if (!this.showLoot) return;
+    const pts = this._lootPoints();
+    if (!pts.length) return;
+    const W = SquadMapGeo.WORLD;
+    const wx0 = v.fx0 * W - 300, wx1 = v.fx1 * W + 300;
+    const wz0 = (1 - v.fy1) * W - 300, wz1 = (1 - v.fy0) * W + 300;
+    const discs = z >= 6;
+    const targetPx = discs ? 13 : (z <= 3 ? 3 : (z === 4 ? 4 : 5.5));
+    const r = targetPx / this.scale;
+    const byCat = {};
+    for (const [x, z2, code] of pts) {
+      if (x < wx0 || x > wx1 || z2 < wz0 || z2 > wz1) continue;
+      (byCat[code] = byCat[code] || []).push([x / W * S, (1 - z2 / W) * S]);
+    }
+    for (const code of Object.keys(byCat)) {
+      const st = LOOT_STYLE[code];
+      if (!st) continue;
+      ctx.beginPath();
+      for (const [cx, cy] of byCat[code]) { ctx.moveTo(cx + r, cy); ctx.arc(cx, cy, r, 0, 6.2832); }
+      ctx.fillStyle = st.color;
+      ctx.globalAlpha = 0.9;
+      ctx.fill();
+      if (discs) {
+        ctx.globalAlpha = 1;
+        ctx.lineWidth = r * 0.22;
+        ctx.strokeStyle = "rgba(10,10,10,0.55)";
+        ctx.stroke();
+      }
+    }
+    if (discs) {
+      ctx.fillStyle = "#fff";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.font = "700 " + (r * 1.15) + "px sans-serif";
+      for (const code of Object.keys(byCat)) {
+        const st = LOOT_STYLE[code];
+        if (!st || !st.glyph) continue;
+        for (const [cx, cy] of byCat[code]) ctx.fillText(st.glyph, cx, cy + r * 0.06);
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  toggleLoot() {
+    this.showLoot = !this.showLoot;
+    this._drawLoot(this._tileZoomForScale(), this._visibleFrac());
+    return this.showLoot;
   }
 
   fit() {

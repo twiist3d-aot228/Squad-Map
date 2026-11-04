@@ -207,6 +207,30 @@ h3 {
   font-family: var(--condensed); font-size: 19px; cursor: pointer;
 }
 .map-zoom #zoom-fit { font-size: 12px; letter-spacing: 1px; }
+.map-zoom .layer-chip { height: 30px; font-size: 10.5px; letter-spacing: 1px; opacity: .5; }
+.map-zoom .layer-chip.on { opacity: 1; border-color: var(--amber); }
+
+/* iZurvive-style layers: tier zones, loot drops, permanent place labels */
+.tier-svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.tier-svg .tier-text {
+  fill: rgba(255,255,255,.55); font-family: var(--condensed);
+  font-size: 300px; letter-spacing: 30px; text-anchor: middle;
+}
+.loot-canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.label-layer { position: absolute; inset: 0; pointer-events: none; }
+.map-label {
+  position: absolute; transform: translate(-50%, -150%);
+  font-family: var(--condensed); font-size: calc(10.5px * var(--inv-scale, 1));
+  letter-spacing: 1px; color: #f2ecd9; white-space: nowrap;
+  text-shadow: 0 1px 3px rgba(0,0,0,.9), 0 0 7px rgba(0,0,0,.8);
+}
+.map-label.major { font-size: calc(13.5px * var(--inv-scale, 1)); font-weight: 700; color: #fff8e2; }
+.map-label.airfield { color: #ffd98a; letter-spacing: 2px; }
+.label-layer .map-label.minor { opacity: 0; transition: opacity .25s; }
+.label-layer.minors .map-label.minor { opacity: .95; }
+/* Place names live in the label layer now (always on top, never blink);
+   the schematic keeps only its grid numbers as text. */
+.map-svg .town text, .map-svg .runway-labels text { display: none; }
 
 #place-banner {
   position: absolute; left: 0; right: 0; top: 0; z-index: 6;
