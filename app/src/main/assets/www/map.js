@@ -44,7 +44,7 @@ const SquadMapGeo = (() => {
     { name: "Vybor", x: 3778, z: 8854 },
     { name: "Pustoshka", x: 3065, z: 7322 },
     { name: "Pogorevka", x: 4521, z: 6488 },
-    { name: "Rogovo", x: 4907, z: 7011 },
+    { name: "Rogovo", x: 4836, z: 6826 },
     { name: "Kabanino", x: 5224, z: 8645 },
     { name: "Grishino", x: 6050, z: 9489 },
     { name: "Stary Sobor", x: 6132, z: 7734, major: true },
@@ -53,7 +53,7 @@ const SquadMapGeo = (() => {
     { name: "Mogilevka", x: 7565, z: 5220 },
     { name: "Nadezhdino", x: 5831, z: 4499 },
     { name: "Kozlovka", x: 4494, z: 4570 },
-    { name: "Bor", x: 3255, z: 4127 },
+    { name: "Bor", x: 3250, z: 4293 },
     { name: "Pavlovo", x: 2073, z: 3403 },
     { name: "Myshkino", x: 1332, z: 5894 },
     { name: "Zelenogorsk", x: 2717, z: 5279, major: true },
@@ -69,7 +69,12 @@ const SquadMapGeo = (() => {
     { name: "Kamensk Military Base", x: 780, z: 12120, poi: true },
     { name: "Pavlovo Military Base", x: 2073, z: 3403, poi: true },
     { name: "Myshkino Tents", x: 1400, z: 5950, poi: true },
-    { name: "Balota Airstrip", x: 4930, z: 2450, airfield: true }
+    { name: "Balota Airstrip", x: 4930, z: 2450, airfield: true },
+    { name: "Novaya Petrovka", x: 10691, z: 8070 },
+    { name: "Gvozdno", x: 11059, z: 12978 },
+    { name: "Nagornoye", x: 11501, z: 13935 },
+    { name: "Zub Castle", x: 6571, z: 10071, poi: true },
+    { name: "Green Mountain", x: 3718, z: 5976, poi: true }
   ];
 
   function gridRef(x, z) {
@@ -113,6 +118,7 @@ class SquadMapView {
     this.ty = 0;
     this.pointers = new Map();
     this.dragDist = 0;
+    this.downPos = null;
     this.lastTapAt = 0;
     this.pinchDist = 0;
 
@@ -221,9 +227,9 @@ class SquadMapView {
       pin.style.setProperty("--pin-scale", String(inv));
     });
     // Place labels counter-scale off the same factor, and minor-town
-    // labels fade in once the view is past ~2x fit zoom (iZurvive-style).
+    // labels fade in on the first real zoom-in (iZurvive-style).
     this.world.style.setProperty("--inv-scale", String(inv));
-    this.labelLayer.classList.toggle("minors", this.scale > (this.minScale || 0.2) * 2.4);
+    this.labelLayer.classList.toggle("minors", this.scale > (this.minScale || 0.2) * 1.25);
     this._queueTiles();
   }
 
@@ -420,6 +426,9 @@ class SquadMapView {
       el.setPointerCapture(e.pointerId);
       this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       this.dragDist = 0;
+      if (this.pointers.size === 1) {
+        this.downPos = { x: e.clientX, y: e.clientY, t: Date.now() };
+      }
       if (this.pointers.size === 2) {
         const [a, b] = [...this.pointers.values()];
         this.pinchDist = Math.hypot(a.x - b.x, a.y - b.y);
@@ -435,7 +444,7 @@ class SquadMapView {
 
       if (this.pointers.size === 1) {
         this.dragDist += Math.abs(dx) + Math.abs(dy);
-        if (this.dragDist > 4) {
+        if (this.dragDist > 9) {
           this.tx += dx;
           this.ty += dy;
           this._clamp();
@@ -455,8 +464,16 @@ class SquadMapView {
     });
 
     const release = (e) => {
-      const wasTap = this.pointers.size === 1 && this.dragDist <= 6;
+      // A tap is judged by where the finger LANDED vs where it LIFTED
+      // (plus press duration), never by accumulated move jitter — a real
+      // fingertip always drifts a few px, and counting that drift as a
+      // drag silently ate taps (Art, Nov 3: "clicking does nothing").
+      const d = this.downPos;
+      const wasTap = this.pointers.size === 1 && d &&
+        Math.hypot(e.clientX - d.x, e.clientY - d.y) <= 16 &&
+        (Date.now() - d.t) <= 600;
       this.pointers.delete(e.pointerId);
+      if (this.pointers.size === 0) this.downPos = null;
       if (wasTap) {
         const now = Date.now();
         if (now - this.lastTapAt > 250) {
@@ -469,7 +486,10 @@ class SquadMapView {
       }
     };
     el.addEventListener("pointerup", release);
-    el.addEventListener("pointercancel", (e) => this.pointers.delete(e.pointerId));
+    el.addEventListener("pointercancel", (e) => {
+      this.pointers.delete(e.pointerId);
+      if (this.pointers.size === 0) this.downPos = null;
+    });
 
     el.addEventListener("wheel", (e) => {
       e.preventDefault();
